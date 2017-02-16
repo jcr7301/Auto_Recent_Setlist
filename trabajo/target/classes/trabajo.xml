@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:cxf="http://www.mulesoft.org/schema/mule/cxf" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:smtp="http://www.mulesoft.org/schema/mule/smtp" xmlns:email="http://www.mulesoft.org/schema/mule/email" xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:pop3s="http://www.mulesoft.org/schema/mule/pop3s" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/cxf http://www.mulesoft.org/schema/mule/cxf/current/mule-cxf.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.mulesoft.org/schema/mule/pop3s http://www.mulesoft.org/schema/mule/pop3s/current/mule-pop3s.xsd
+http://www.mulesoft.org/schema/mule/smtp http://www.mulesoft.org/schema/mule/smtp/current/mule-smtp.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+
+<!-- IMPORTANTE: Antes de lanzar la aplicación debes renovar la token de autentificación tal
+ y como está explicado en el pdf DE LO CONTRARIO LA APLICACIÓN DARÁ UN ERROR 'MAPPED 401'-->
+    <http:request-config name="HTTP_Request_Configuration" host="setlist.fm" port="80" doc:name="HTTP Request Configuration"/>
+    <pop3s:connector name="POP3" validateConnections="true" doc:name="POP3" checkFrequency="10000">
+    </pop3s:connector>
+    <file:connector name="File" autoDelete="true" streaming="true" validateConnections="true" doc:name="File"/>
+    <http:request-config name="HTTP_Request_Configuration1" protocol="HTTPS" host="api.spotify.com" port="443" doc:name="HTTP Request Configuration">
+    </http:request-config>
+    <db:mysql-config name="MySQL_Configuration" host="localhost" port="3306" user="root" database="iap" doc:name="MySQL Configuration"/>
+    <http:listener-config name="HTTP_Listener_Configuration" host="localhost" port="8081" basePath="/listas" doc:name="HTTP Listener Configuration"/>
+    <flow name="Main">
+        <composite-source doc:name="Composite Source">
+            <pop3s:inbound-endpoint host="pop.gmail.com" port="995" user="iapetsinf" password="iap_pass" responseTimeout="10000" doc:name="POP3" connector-ref="POP3"/>
+            <file:inbound-endpoint responseTimeout="10000" doc:name="File" connector-ref="File" path="C:\Users\NONE\Desktop\IAP\Trabajo\Grupos">
+                <file:filename-regex-filter pattern=".+\.txt" caseSensitive="true"/>
+            </file:inbound-endpoint>
+        </composite-source>
+        <choice doc:name="Choice">
+            <when expression="#[message.inboundProperties.originalDirectory!=null]">
+                <file:file-to-string-transformer doc:name="File to String"/>
+                <set-variable variableName="nombreGrupo" value="#[message.payload]" doc:name="Nombre Grupo"/>
+                <flow-ref name="createSpotifySetlist" doc:name="createSpotifySetlist"/>
+                <set-payload value="#['Lista creada con &#233;xito! Puedes escuchar tu lista en: https://play.spotify.com/user/iap_proyecto/playlist/' + flowVars.playlist]" doc:name="Set Payload"/>
+                <logger message="#[message.payload]" level="INFO" doc:name="Logger"/>
+                <db:insert config-ref="MySQL_Configuration" doc:name="Database">
+                    <db:parameterized-query><![CDATA[INSERT into listas(grupo, lista) VALUES(
+#[flowVars.nombreGrupo],
+#[message.payload])]]></db:parameterized-query>
+                </db:insert>
+            </when>
+            <when expression="#[message.inboundProperties.subject=='nueva lista']">
+                <set-variable variableName="remitente" value="#[message.inboundProperties.from]" doc:name="Variable"/>
+                <email:email-to-string-transformer doc:name="Email to String"/>
+                <custom-transformer class="transformadores.eliminarSaltos" doc:name="eliminar saltos de linea"/>
+                <set-variable variableName="nombreGrupo" value="#[message.payload]" doc:name="Nombre Grupo"/>
+                <flow-ref name="createSpotifySetlist" doc:name="createSpotifySetlist"/>
+                <set-payload value="#['Lista creada con &#233;xito! Puedes escuchar tu lista en: https://play.spotify.com/user/iap_proyecto/playlist/' + flowVars.playlist]" doc:name="Set Payload"/>
+                <logger message="#[message.payload]" level="INFO" doc:name="Logger"/>
+                <smtp:outbound-endpoint host="smtp.upv.es" to="#[flowVars.remitente]" from="iapetsinf@gmail.com" subject="Tu lista de Spotify" responseTimeout="60000" mimeType="application/csv" doc:name="SMTP">
+                    <reconnect/>
+                </smtp:outbound-endpoint>
+                <db:insert config-ref="MySQL_Configuration" doc:name="Database">
+                    <db:parameterized-query><![CDATA[INSERT into listas(grupo, lista) VALUES(
+#[flowVars.nombreGrupo],
+#[message.payload])]]></db:parameterized-query>
+                </db:insert>
+            </when>
+            <otherwise>
+                <logger message="#['Asunto no v&#225;lido']" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+    </flow>
+    <sub-flow name="createSpotifySetlist">
+        <set-variable variableName="token" value="#['BQCee7CGl2Pe4cywrU5swJ0iSCx6qOlGVbnWOkEu5NaX2ADBuCQsPubBX9gC5s1_qd7EZyWZajR4PWZYxpab-52q-hU0zjtJ1JZkhSKsJa4mGHwskpgGkSulUsn1PngHJ7mmR7s4e-ZcXE5DdkoRMfEdf6eMP2C_R3JY0FZeXjIle8dW8DaFg1Q1P9IYBPJ2KWMjXRMyQH_7_ZhSBb7kYpV8UEPWZtneQyNH5YTi5z01rkRDkTBYcLWjXQ']" doc:name="OAuth Token"/>
+        <set-payload value="{&quot;name&quot;: &quot;Setlist reciente de #[flowVars.nombreGrupo]&quot;, &quot;public&quot;: true}" doc:name="Set Payload_Mensaje para mandar a Spotify"/>
+        <http:request config-ref="HTTP_Request_Configuration1" path="v1/users/iap_proyecto/playlists" method="POST" doc:name="Crear Playlist">
+            <http:request-builder>
+                <http:header headerName="Content-Type" value="application/json"/>
+                <http:header headerName="Accept" value="application/json"/>
+                <http:header headerName="Authorization" value="Bearer #[flowVars.token]"/>
+            </http:request-builder>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <set-variable variableName="playlist" value="#[json:id]" doc:name="Id Playlist"/>
+        <flow-ref name="getSetlist" doc:name="getSetlist"/>
+        <flow-ref name="getSpotifyCanciones" doc:name="getSpotifyCanciones"/>
+
+    </sub-flow>
+    <sub-flow name="getSetlist">
+        <http:request config-ref="HTTP_Request_Configuration" path="search" method="GET" doc:name="Get Id Grupo">
+            <http:request-builder>
+                <http:query-param paramName="query" value="#[flowVars.nombreGrupo]"/>
+            </http:request-builder>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <custom-transformer class="transformadores.getIdWeb" doc:name="getIdWeb"/>
+        <http:request config-ref="HTTP_Request_Configuration" path="search" method="GET" doc:name="Get Ultimos Conciertos">
+            <http:request-builder>
+                <http:query-param paramName="query" value="#[flowVars.nombreGrupo]"/>
+                <http:query-param paramName="artist" value="#[message.payload]"/>
+            </http:request-builder>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <custom-transformer class="transformadores.getUltimosConciertos" doc:name="getUltimosConciertos"/>
+        <splitter expression="#[org.mule.util.StringUtils.split(message.payload, ';')]" doc:name="Splitter"/>
+        <set-variable variableName="Sequence" value="#[message.outboundProperties.MULE_CORRELATION_SEQUENCE]" doc:name="Sequence"/>
+        <set-variable variableName="Group_Size" value="#[message.outboundProperties.MULE_CORRELATION_GROUP_SIZE]" doc:name="Size"/>
+        <set-variable variableName="Id" value="#[message.outboundProperties.MULE_CORRELATION_ID]" doc:name="Id"/>
+        <http:request config-ref="HTTP_Request_Configuration" path="#[message.payload]" method="GET" doc:name="Get Canciones Conciertos"/>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <custom-transformer class="transformadores.getSetlist" doc:name="getSetlist"/>
+        <set-property propertyName="MULE_CORRELATION_SEQUENCE" value="#[flowVars.Sequence]" doc:name="Property_Sequence"/>
+        <set-property propertyName="MULE_CORRELATION_GROUP_SIZE" value="#[flowVars.Group_Size]" doc:name="Property_Size"/>
+        <set-property propertyName="MULE_CORRELATION_ID" value="#[flowVars.Id]" doc:name="Property_Id"/>
+        <collection-aggregator timeout="120000" failOnTimeout="false" doc:name="Collection Aggregator"/>
+        <custom-transformer class="transformadores.cleanSetlist" doc:name="cleanSetlist"/>
+    </sub-flow>
+    <sub-flow name="getSpotifyCanciones">
+        <splitter expression="#[org.mule.util.StringUtils.split(message.payload, ';')]" doc:name="Splitter"/>
+        <set-variable variableName="Sequence" value="#[message.outboundProperties.MULE_CORRELATION_SEQUENCE]" doc:name="Sequence"/>
+        <set-variable variableName="nombreCancion" value="#[message.payload]" doc:name="Nombre canci&#243;n"/>
+        <http:request config-ref="HTTP_Request_Configuration1" path="v1/search" method="GET" doc:name="Solicitar uris de canciones">
+            <http:request-builder>
+                <http:query-param paramName="q" value="#[message.payload]"/>
+                <http:query-param paramName="type" value="track"/>
+            </http:request-builder>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <scripting:component doc:name="Comprobar Artista">
+            <scripting:script engine="JavaScript"><![CDATA[/*Ya que Spotify devuelve varios resultados para un mismo nombre de canción
+debemos comprobar que la canción que estamos añadiendo pertenece efectivamente
+al grupo que estamos buscando*/
+
+var jObj = eval("(" + payload + ")");
+var nombreGrupo = message.getInvocationProperty('nombreGrupo')
+var uri = "";
+
+for(var i=0;i<jObj.tracks.items.length;i++){
+	if(jObj.tracks.items[i].artists[0].name.toLowerCase() == nombreGrupo.toLowerCase()){
+		uri=jObj.tracks.items[i].uri;
+		break;
+	}
+}
+
+payload = uri;]]></scripting:script>
+        </scripting:component>
+
+        <set-variable variableName="uri" value="#[message.payload]" doc:name="Uri"/>
+        <choice doc:name="Choice">
+            <when expression="#[flowVars.uri!=&quot;&quot;]">
+                <set-payload value="#[&quot;&quot;]" doc:name="Set Payload"/>
+                <http:request config-ref="HTTP_Request_Configuration1" path="v1/users/iap_proyecto/playlists/#[flowVars.playlist]/tracks" method="POST" doc:name="A&#241;adir Canci&#243;n">
+                    <http:request-builder>
+                        <http:query-param paramName="uris" value="#[flowVars.uri]"/>
+                        <http:header headerName="Content-Type" value="application/json"/>
+                        <http:header headerName="Accept" value="application/json"/>
+                        <http:header headerName="Authorization" value="Bearer #[flowVars.token]"/>
+
+                    </http:request-builder>
+                </http:request>
+            </when>
+            <otherwise>
+                <logger message="#['La siguiente canci&#243;n no ha podido ser a&#241;adida: ' + flowVars.nombreCancion]" level="INFO" doc:name="Logger"/>
+
+            </otherwise>
+        </choice>
+
+
+    </sub-flow>
+    <flow name="ServicioSoap">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/" doc:name="HTTP"/>
+        <cxf:jaxws-service serviceClass="es.upv.etsinf.iap.mule.webservice.ListasWS" doc:name="CXF"/>
+        <db:select config-ref="MySQL_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[SELECT grupo, lista FROM listas]]></db:parameterized-query>
+        </db:select>
+        <dw:transform-message metadata:id="71eeeb37-0a47-4865-8d60-4d45c1255ca9" doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload map ((payload01 , indexOfPayload01) -> {
+	grupo: payload01.grupo,
+	lista: payload01.lista
+} as :object {
+	class : "es.upv.etsinf.iap.mule.webservice.Listas"
+})]]></dw:set-payload>
+        </dw:transform-message>
+    </flow>
+
+</mule>
